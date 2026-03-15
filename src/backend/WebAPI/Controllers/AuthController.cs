@@ -1,122 +1,54 @@
-﻿using Application.Features.Auth.Commands.EnableEmailAuthenticator;
-using Application.Features.Auth.Commands.EnableOtpAuthenticator;
-using Application.Features.Auth.Commands.Login;
-using Application.Features.Auth.Commands.RefreshToken;
-using Application.Features.Auth.Commands.Register;
-using Application.Features.Auth.Commands.RevokeToken;
-using Application.Features.Auth.Commands.VerifyEmailAuthenticator;
-using Application.Features.Auth.Commands.VerifyOtpAuthenticator;
-using Domain.Entities;
+﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Mvc.ModelBinding;
-using NArchitecture.Core.Application.Dtos;
+using System.Security.Claims;
 
 namespace WebAPI.Controllers;
 
 [Route("api/[controller]")]
 [ApiController]
-public class AuthController : BaseController
+public class AuthController : ControllerBase
 {
-    private readonly WebApiConfiguration _configuration;
-
-    public AuthController(IConfiguration configuration)
+    /// <summary>
+    /// Keycloak ile kullanıcı girişi bilgilerini döndürür
+    /// </summary>
+    [HttpGet("userinfo")]
+    [Authorize] // Gerçek authentication için authorize geri al
+    public IActionResult GetUserInfo()
     {
-        const string configurationSection = "WebAPIConfiguration";
-        _configuration =
-            configuration.GetSection(configurationSection).Get<WebApiConfiguration>()
-            ?? throw new NullReferenceException($"\"{configurationSection}\" section cannot found in configuration.");
+        var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        var email = User.FindFirst(ClaimTypes.Email)?.Value;
+        var name = User.FindFirst(ClaimTypes.Name)?.Value;
+        var roles = User.FindAll(ClaimTypes.Role).Select(r => r.Value).ToList();
+
+        return Ok(new
+        {
+            UserId = userId,
+            Email = email,
+            Name = name,
+            Roles = roles,
+            IsAuthenticated = User.Identity?.IsAuthenticated ?? false
+        });
     }
 
-    [HttpPost("Login")]
-    public async Task<IActionResult> Login([FromBody] UserForLoginDto userForLoginDto)
+    /// <summary>
+    /// Kullanıcının giriş yapılıp yapılmadığını kontrol eder
+    /// </summary>
+    [HttpGet("check-auth")]
+    [Authorize] // Gerçek authentication için authorize geri al
+    public IActionResult CheckAuth()
     {
-        LoginCommand loginCommand = new() { UserForLoginDto = userForLoginDto, IpAddress = getIpAddress() };
-        LoggedResponse result = await Mediator.Send(loginCommand);
-
-        if (result.RefreshToken is not null)
-            setRefreshTokenToCookie(result.RefreshToken);
-
-        return Ok(result.ToHttpResponse());
+        return Ok(new { IsAuthenticated = true });
     }
 
-    [HttpPost("Register")]
-    public async Task<IActionResult> Register([FromBody] UserForRegisterDto userForRegisterDto)
+    /// <summary>
+    /// Çıkış yapar (client tarafında token temizlenmeli)
+    /// </summary>
+    [HttpPost("logout")]
+    [Authorize]
+    public IActionResult Logout()
     {
-        RegisterCommand registerCommand = new() { UserForRegisterDto = userForRegisterDto, IpAddress = getIpAddress() };
-        RegisteredResponse result = await Mediator.Send(registerCommand);
-        setRefreshTokenToCookie(result.RefreshToken);
-        return Created(uri: "", result.AccessToken);
-    }
-
-    [HttpGet("RefreshToken")]
-    public async Task<IActionResult> RefreshToken()
-    {
-        RefreshTokenCommand refreshTokenCommand =
-            new() { RefreshToken = getRefreshTokenFromCookies(), IpAddress = getIpAddress() };
-        RefreshedTokensResponse result = await Mediator.Send(refreshTokenCommand);
-        setRefreshTokenToCookie(result.RefreshToken);
-        return Created(uri: "", result.AccessToken);
-    }
-
-    [HttpPut("RevokeToken")]
-    public async Task<IActionResult> RevokeToken([FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] string? refreshToken)
-    {
-        RevokeTokenCommand revokeTokenCommand =
-            new() { Token = refreshToken ?? getRefreshTokenFromCookies(), IpAddress = getIpAddress() };
-        RevokedTokenResponse result = await Mediator.Send(revokeTokenCommand);
-        return Ok(result);
-    }
-
-    [HttpGet("EnableEmailAuthenticator")]
-    public async Task<IActionResult> EnableEmailAuthenticator()
-    {
-        EnableEmailAuthenticatorCommand enableEmailAuthenticatorCommand =
-            new()
-            {
-                UserId = getUserIdFromRequest(),
-                VerifyEmailUrlPrefix = $"{_configuration.ApiDomain}/Auth/VerifyEmailAuthenticator"
-            };
-        await Mediator.Send(enableEmailAuthenticatorCommand);
-
-        return Ok();
-    }
-
-    [HttpGet("EnableOtpAuthenticator")]
-    public async Task<IActionResult> EnableOtpAuthenticator()
-    {
-        EnableOtpAuthenticatorCommand enableOtpAuthenticatorCommand = new() { UserId = getUserIdFromRequest() };
-        EnabledOtpAuthenticatorResponse result = await Mediator.Send(enableOtpAuthenticatorCommand);
-
-        return Ok(result);
-    }
-
-    [HttpGet("VerifyEmailAuthenticator")]
-    public async Task<IActionResult> VerifyEmailAuthenticator(
-        [FromQuery] VerifyEmailAuthenticatorCommand verifyEmailAuthenticatorCommand
-    )
-    {
-        await Mediator.Send(verifyEmailAuthenticatorCommand);
-        return Ok();
-    }
-
-    [HttpPost("VerifyOtpAuthenticator")]
-    public async Task<IActionResult> VerifyOtpAuthenticator([FromBody] string authenticatorCode)
-    {
-        VerifyOtpAuthenticatorCommand verifyEmailAuthenticatorCommand =
-            new() { UserId = getUserIdFromRequest(), ActivationCode = authenticatorCode };
-
-        await Mediator.Send(verifyEmailAuthenticatorCommand);
-        return Ok();
-    }
-
-    private string getRefreshTokenFromCookies()
-    {
-        return Request.Cookies["refreshToken"] ?? throw new ArgumentException("Refresh token is not found in request cookies.");
-    }
-
-    private void setRefreshTokenToCookie(RefreshToken refreshToken)
-    {
-        CookieOptions cookieOptions = new() { HttpOnly = true, Expires = DateTime.UtcNow.AddDays(7) };
-        Response.Cookies.Append(key: "refreshToken", refreshToken.Token, cookieOptions);
+        // Keycloak logout URL'ini döndür
+        var logoutUrl = "http://localhost:8080/realms/master/protocol/openid-connect/logout";
+        return Ok(new { LogoutUrl = logoutUrl });
     }
 }

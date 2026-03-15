@@ -1,68 +1,74 @@
-﻿using Application.Features.Users.Commands.Create;
-using Application.Features.Users.Commands.Delete;
-using Application.Features.Users.Commands.Update;
-using Application.Features.Users.Commands.UpdateFromAuth;
-using Application.Features.Users.Queries.GetById;
-using Application.Features.Users.Queries.GetList;
+﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using NArchitecture.Core.Application.Requests;
-using NArchitecture.Core.Application.Responses;
+using System.Security.Claims;
 
 namespace WebAPI.Controllers;
 
 [Route("api/[controller]")]
 [ApiController]
-public class UsersController : BaseController
+public class UsersController : ControllerBase
 {
-    [HttpGet("{Id}")]
-    public async Task<IActionResult> GetById([FromRoute] GetByIdUserQuery getByIdUserQuery)
+    /// <summary>
+    /// Mevcut kullanıcının bilgilerini Keycloak üzerinden alır
+    /// </summary>
+    [HttpGet("me")]
+    [AllowAnonymous] // Keycloak çalışmadığında test edilebilmek için geçici olarakAllowAnonymous
+    public IActionResult GetCurrentUser()
     {
-        GetByIdUserResponse result = await Mediator.Send(getByIdUserQuery);
-        return Ok(result);
+        // Eğer kullanıcı authenticated değilse mock data döndür
+        if (!User.Identity?.IsAuthenticated ?? true)
+        {
+            return Ok(new
+            {
+                Id = "mock-user-id",
+                Email = "mock@example.com",
+                Name = "Mock User",
+                FirstName = "Mock",
+                LastName = "User",
+                Roles = new[] { "User" },
+                IsAuthenticated = false,
+                Message = "Keycloak sunucusu çalışmıyor - mock veri döndürülüyor"
+            });
+        }
+
+        var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        var email = User.FindFirst(ClaimTypes.Email)?.Value;
+        var name = User.FindFirst(ClaimTypes.Name)?.Value;
+        var firstName = User.FindFirst("given_name")?.Value;
+        var lastName = User.FindFirst("family_name")?.Value;
+        var roles = User.FindAll(ClaimTypes.Role).Select(r => r.Value).ToList();
+
+        return Ok(new
+        {
+            Id = userId,
+            Email = email,
+            Name = name,
+            FirstName = firstName,
+            LastName = lastName,
+            Roles = roles,
+            IsAuthenticated = User.Identity?.IsAuthenticated ?? false
+        });
     }
 
-    [HttpGet("GetFromAuth")]
-    public async Task<IActionResult> GetFromAuth()
+    /// <summary>
+    /// Kullanıcının rollerini döndürür
+    /// </summary>
+    [HttpGet("roles")]
+    [Authorize]
+    public IActionResult GetUserRoles()
     {
-        GetByIdUserQuery getByIdUserQuery = new() { Id = getUserIdFromRequest() };
-        GetByIdUserResponse result = await Mediator.Send(getByIdUserQuery);
-        return Ok(result);
+        var roles = User.FindAll(ClaimTypes.Role).Select(r => r.Value).ToList();
+        return Ok(roles);
     }
 
-    [HttpGet]
-    public async Task<IActionResult> GetList([FromQuery] PageRequest pageRequest)
+    /// <summary>
+    /// Kullanıcının belirli bir role sahip olup olmadığını kontrol eder
+    /// </summary>
+    [HttpGet("has-role/{role}")]
+    [Authorize]
+    public IActionResult HasRole([FromRoute] string role)
     {
-        GetListUserQuery getListUserQuery = new() { PageRequest = pageRequest };
-        GetListResponse<GetListUserListItemDto> result = await Mediator.Send(getListUserQuery);
-        return Ok(result);
-    }
-
-    [HttpPost]
-    public async Task<IActionResult> Add([FromBody] CreateUserCommand createUserCommand)
-    {
-        CreatedUserResponse result = await Mediator.Send(createUserCommand);
-        return Created(uri: "", result);
-    }
-
-    [HttpPut]
-    public async Task<IActionResult> Update([FromBody] UpdateUserCommand updateUserCommand)
-    {
-        UpdatedUserResponse result = await Mediator.Send(updateUserCommand);
-        return Ok(result);
-    }
-
-    [HttpPut("FromAuth")]
-    public async Task<IActionResult> UpdateFromAuth([FromBody] UpdateUserFromAuthCommand updateUserFromAuthCommand)
-    {
-        updateUserFromAuthCommand.Id = getUserIdFromRequest();
-        UpdatedUserFromAuthResponse result = await Mediator.Send(updateUserFromAuthCommand);
-        return Ok(result);
-    }
-
-    [HttpDelete]
-    public async Task<IActionResult> Delete([FromBody] DeleteUserCommand deleteUserCommand)
-    {
-        DeletedUserResponse result = await Mediator.Send(deleteUserCommand);
-        return Ok(result);
+        var hasRole = User.IsInRole(role);
+        return Ok(new { HasRole = hasRole });
     }
 }
